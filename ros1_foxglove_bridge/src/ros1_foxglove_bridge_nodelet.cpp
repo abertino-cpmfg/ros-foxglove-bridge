@@ -9,6 +9,7 @@
 
 #include <nodelet/nodelet.h>
 #include <pluginlib/class_list_macros.h>
+#include <resource_retriever/retriever.h>
 #include <ros/message_event.h>
 #include <ros/ros.h>
 #include <ros/xmlrpc_manager.h>
@@ -151,6 +152,13 @@ public:
       hdlrs.subscribeConnectionGraphHandler = [this](bool subscribe) {
         _subscribeGraphUpdates = subscribe;
       };
+
+      if (hasCapability(foxglove::CAPABILITY_ASSETS)) {
+        hdlrs.fetchAssetHandler =
+          std::bind(&FoxgloveBridge::fetchAsset, this, std::placeholders::_1, std::placeholders::_2,
+                    std::placeholders::_3);
+      }
+
       _server->setHandlers(std::move(hdlrs));
 
       _server->start(address, static_cast<uint16_t>(port));
@@ -842,6 +850,26 @@ private:
       throw foxglove::ServiceError(
         request.serviceId, "Failed to call service " + serviceName + "(" + serviceType + ")");
     }
+  }
+
+  void fetchAsset(const std::string& assetId, uint32_t requestId, ConnectionHandle clientHandle) {
+    resource_retriever::Retriever retriever;
+    foxglove::FetchAssetResponse response;
+    response.requestId = requestId;
+
+    try {
+      const resource_retriever::MemoryResource memoryResource = retriever.get(assetId);
+      response.status = foxglove::FetchAssetStatus::Success;
+      response.mediaTypeOrMsg = "";
+      response.data.resize(memoryResource.size);
+      std::memcpy(response.data.data(), memoryResource.data.get(), memoryResource.size);
+    } catch (const resource_retriever::Exception& ex) {
+      ROS_WARN("Failed to retrieve asset '%s': %s", assetId.c_str(), ex.what());
+      response.status = foxglove::FetchAssetStatus::Error;
+      response.mediaTypeOrMsg = "Failed to retrieve asset " + assetId;
+    }
+
+    _server->sendFetchAssetResponse(clientHandle, response);
   }
 
   bool hasCapability(const std::string& capability) {

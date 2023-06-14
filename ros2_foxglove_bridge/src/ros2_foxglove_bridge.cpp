@@ -1,5 +1,7 @@
 #include <unordered_set>
 
+#include <resource_retriever/retriever.hpp>
+
 #include <foxglove_bridge/ros2_foxglove_bridge.hpp>
 
 namespace foxglove_bridge {
@@ -86,6 +88,10 @@ FoxgloveBridge::FoxgloveBridge(const rclcpp::NodeOptions& options)
 
     _paramInterface = std::make_shared<ParameterInterface>(this, paramWhitelistPatterns);
     _paramInterface->setParamUpdateCallback(std::bind(&FoxgloveBridge::parameterUpdates, this, _1));
+  }
+
+  if (hasCapability(foxglove::CAPABILITY_ASSETS)) {
+    hdlrs.fetchAssetHandler = std::bind(&FoxgloveBridge::fetchAsset, this, _1, _2, _3);
   }
 
   _server->setHandlers(std::move(hdlrs));
@@ -789,6 +795,28 @@ void FoxgloveBridge::serviceRequest(const foxglove::ServiceRequest& request,
     _server->sendServiceResponse(clientHandle, response);
   };
   client->async_send_request(reqMessage, responseReceivedCallback);
+}
+
+void FoxgloveBridge::fetchAsset(const std::string& assetId, uint32_t requestId,
+                                ConnectionHandle clientHandle) {
+  resource_retriever::Retriever retriever;
+  foxglove::FetchAssetResponse response;
+  response.requestId = requestId;
+
+  try {
+    const resource_retriever::MemoryResource memoryResource = retriever.get(assetId);
+    response.status = foxglove::FetchAssetStatus::Success;
+    response.mediaTypeOrMsg = "";
+    response.data.resize(memoryResource.size);
+    std::memcpy(response.data.data(), memoryResource.data.get(), memoryResource.size);
+  } catch (const resource_retriever::Exception& ex) {
+    RCLCPP_WARN(this->get_logger(), "Failed to retrieve asset '%s': %s", assetId.c_str(),
+                ex.what());
+    response.status = foxglove::FetchAssetStatus::Error;
+    response.mediaTypeOrMsg = "Failed to retrieve asset " + assetId;
+  }
+
+  _server->sendFetchAssetResponse(clientHandle, response);
 }
 
 bool FoxgloveBridge::hasCapability(const std::string& capability) {

@@ -438,6 +438,49 @@ TEST_F(ServiceTest, testCallServiceParallel) {
   }
 }
 
+TEST(FetchAssetTest, fetchExistingAsset) {
+  auto wsClient = std::make_shared<foxglove::Client<websocketpp::config::asio_client>>();
+  EXPECT_EQ(std::future_status::ready, wsClient->connect(URI).wait_for(DEFAULT_TIMEOUT));
+
+  const auto tmpFilePath = std::tmpnam(nullptr);
+  constexpr char content[] = "Hello, world";
+  FILE* tmpAssetFile = std::fopen(tmpFilePath, "w");
+  std::fputs(content, tmpAssetFile);
+  std::fclose(tmpAssetFile);
+
+  const std::string assetId = std::string("file://") + tmpFilePath;
+  const uint32_t requestId = 123;
+
+  auto future = foxglove::waitForFetchAssetResponse(wsClient);
+  wsClient->fetchAsset(assetId, requestId);
+  ASSERT_EQ(std::future_status::ready, future.wait_for(DEFAULT_TIMEOUT));
+  const foxglove::FetchAssetResponse assetResponse = future.get();
+
+  EXPECT_EQ(assetResponse.requestId, requestId);
+  EXPECT_EQ(assetResponse.status, foxglove::FetchAssetStatus::Success);
+  // +1 since NULL terminator is not written to file.
+  ASSERT_EQ(assetResponse.data.size() + 1ul, sizeof(content));
+  EXPECT_EQ(0, std::memcmp(content, assetResponse.data.data(), assetResponse.data.size()));
+  std::remove(tmpFilePath);
+}
+
+TEST(FetchAssetTest, fetchNonExistingAsset) {
+  auto wsClient = std::make_shared<foxglove::Client<websocketpp::config::asio_client>>();
+  EXPECT_EQ(std::future_status::ready, wsClient->connect(URI).wait_for(DEFAULT_TIMEOUT));
+
+  const std::string assetId = "file:///foo/bar";
+  const uint32_t requestId = 456;
+
+  auto future = foxglove::waitForFetchAssetResponse(wsClient);
+  wsClient->fetchAsset(assetId, requestId);
+  ASSERT_EQ(std::future_status::ready, future.wait_for(DEFAULT_TIMEOUT));
+  const foxglove::FetchAssetResponse assetResponse = future.get();
+
+  EXPECT_EQ(assetResponse.requestId, requestId);
+  EXPECT_EQ(assetResponse.status, foxglove::FetchAssetStatus::Error);
+  ASSERT_TRUE(assetResponse.data.empty());
+}
+
 // Run all the tests that were declared with TEST()
 int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);

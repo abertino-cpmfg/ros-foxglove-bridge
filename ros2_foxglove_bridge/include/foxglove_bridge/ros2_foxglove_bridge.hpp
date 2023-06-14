@@ -110,6 +110,8 @@ private:
 
   void serviceRequest(const foxglove::ServiceRequest& request, ConnectionHandle clientHandle);
 
+  void fetchAsset(const std::string& assetId, uint32_t requestId, ConnectionHandle clientHandle);
+
   bool hasCapability(const std::string& capability);
 };
 

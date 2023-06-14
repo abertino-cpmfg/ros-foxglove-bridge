@@ -69,6 +69,7 @@ const std::unordered_map<std::string, std::string> CAPABILITY_BY_CLIENT_OPERATIO
   {"unsubscribeParameterUpdates", CAPABILITY_PARAMETERS_SUBSCRIBE},
   {"subscribeConnectionGraph", CAPABILITY_CONNECTION_GRAPH},
   {"unsubscribeConnectionGraph", CAPABILITY_CONNECTION_GRAPH},
+  {"fetchAsset", CAPABILITY_ASSETS},
 };
 
 /// Map of required capability by client operation (binary).
@@ -131,6 +132,7 @@ public:
   void sendServiceResponse(ConnHandle clientHandle, const ServiceResponse& response) override;
   void updateConnectionGraph(const MapOfSets& publishedTopics, const MapOfSets& subscribedTopics,
                              const MapOfSets& advertisedServices) override;
+  void sendFetchAssetResponse(ConnHandle clientHandle, const FetchAssetResponse& response) override;
 
   uint16_t getPort() override;
   std::string remoteEndpointString(ConnHandle clientHandle) override;
@@ -622,6 +624,7 @@ inline void Server<ServerConfiguration>::handleTextMessage(ConnHandle hdl, Messa
   constexpr auto UNSUBSCRIBE_PARAMETER_UPDATES = Integer("unsubscribeParameterUpdates");
   constexpr auto SUBSCRIBE_CONNECTION_GRAPH = Integer("subscribeConnectionGraph");
   constexpr auto UNSUBSCRIBE_CONNECTION_GRAPH = Integer("unsubscribeConnectionGraph");
+  constexpr auto FETCH_ASSET = Integer("fetchAsset");
 
   switch (Integer(op)) {
     case SUBSCRIBE: {
@@ -904,6 +907,22 @@ inline void Server<ServerConfiguration>::handleTextMessage(ConnHandle hdl, Messa
       } else {
         sendStatusAndLogMsg(hdl, StatusLevel::Error,
                             "Client was not subscribed to connection graph updates");
+      }
+    } break;
+    case FETCH_ASSET: {
+      if (!_handlers.fetchAssetHandler) {
+        return;
+      }
+
+      const auto assetId = payload.at("assetId").get<std::string>();
+      const auto requestId = payload.at("requestId").get<uint32_t>();
+
+      try {
+        _handlers.fetchAssetHandler(assetId, requestId, hdl);
+      } catch (const std::exception& e) {
+        sendStatusAndLogMsg(hdl, StatusLevel::Error, e.what());
+      } catch (...) {
+        sendStatusAndLogMsg(hdl, StatusLevel::Error, op + ": Failed to execute handler");
       }
     } break;
     default: {
@@ -1369,6 +1388,31 @@ template <typename ServerConfiguration>
 inline bool Server<ServerConfiguration>::hasCapability(const std::string& capability) const {
   return std::find(_options.capabilities.begin(), _options.capabilities.end(), capability) !=
          _options.capabilities.end();
+}
+
+template <typename ServerConfiguration>
+inline void Server<ServerConfiguration>::sendFetchAssetResponse(
+  ConnHandle clientHandle, const FetchAssetResponse& response) {
+  std::error_code ec;
+  const auto con = _server.get_con_from_hdl(clientHandle, ec);
+  if (ec || !con) {
+    return;
+  }
+
+  std::array<uint8_t, 1 + 4 + 1 + 4> msgHeader;
+  msgHeader[0] = uint8_t(BinaryOpcode::FETCH_ASSET_RESPONSE);
+  foxglove::WriteUint32LE(msgHeader.data() + 1, response.requestId);
+  msgHeader[1 + 4] = uint8_t(response.status);
+  foxglove::WriteUint32LE(msgHeader.data() + 1 + 4 + 1,
+                          static_cast<uint32_t>(response.mediaTypeOrMsg.size()));
+  const size_t messageSize =
+    msgHeader.size() + response.mediaTypeOrMsg.size() + response.data.size();
+  auto message = con->get_message(OpCode::BINARY, messageSize);
+  message->set_compressed(_options.useCompression);
+  message->set_payload(msgHeader.data(), msgHeader.size());
+  message->append_payload(response.mediaTypeOrMsg);
+  message->append_payload(response.data.data(), response.data.size());
+  con->send(message);
 }
 
 }  // namespace foxglove
