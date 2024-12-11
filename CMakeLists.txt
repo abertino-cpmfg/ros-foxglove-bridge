@@ -41,16 +41,7 @@ if (ENDIAN)
   add_compile_definitions(ARCH_IS_BIG_ENDIAN=1)
 endif()
 
-# Get git commit hash and replace variables in version.cpp.in
-find_program(GIT_SCM git DOC "Git version control")
-if (GIT_SCM)
-  execute_process(
-    COMMAND ${GIT_SCM} describe --always --dirty --exclude="*"
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    OUTPUT_VARIABLE FOXGLOVE_BRIDGE_GIT_HASH
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-  )
-endif()
+# Replace variables in version.cpp.in
 set(FOXGLOVE_BRIDGE_VERSION "${CMAKE_PROJECT_VERSION}")
 configure_file(foxglove_bridge_base/src/version.cpp.in
                foxglove_bridge_base/src/version.cpp @ONLY)

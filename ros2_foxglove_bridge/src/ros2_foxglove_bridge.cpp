@@ -457,7 +457,11 @@ void FoxgloveBridge::subscribe(foxglove::ChannelId channelId, ConnectionHandle c
     if (qos.durability() == rclcpp::DurabilityPolicy::TransientLocal) {
       ++durabilityTransientLocalEndpointsCount;
     }
-    depth = std::min(_maxQosDepth, depth + qos.depth());
+    if (topic == "/tf") {
+      depth = 50;
+    } else {
+      depth = std::min(_maxQosDepth, depth + qos.depth());
+    }
   }
 
   rclcpp::QoS qos{rclcpp::KeepLast(std::max(depth, _minQosDepth))};
