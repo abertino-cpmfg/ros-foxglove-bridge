@@ -1,5 +1,7 @@
 #include <unordered_set>
 
+#include <resource_retriever/retriever.hpp>
+
 #include <foxglove_bridge/ros2_foxglove_bridge.hpp>
 
 namespace foxglove_bridge {
@@ -47,14 +49,20 @@ FoxgloveBridge::FoxgloveBridge(const rclcpp::NodeOptions& options)
     this->get_parameter(PARAM_CLIENT_TOPIC_WHITELIST).as_string_array();
   const auto clientTopicWhiteListPatterns = parseRegexStrings(this, clientTopicWhiteList);
   _includeHidden = this->get_parameter(PARAM_INCLUDE_HIDDEN).as_bool();
+  const auto assetUriAllowlist = this->get_parameter(PARAM_ASSET_URI_ALLOWLIST).as_string_array();
+  _assetUriAllowlistPatterns = parseRegexStrings(this, assetUriAllowlist);
+  _disableLoanMessage = this->get_parameter(PARAM_DISABLE_LOAN_MESSAGE).as_bool();
 
   const auto logHandler = std::bind(&FoxgloveBridge::logHandler, this, _1, _2);
+  // Fetching of assets may be blocking, hence we fetch them in a separate thread.
+  _fetchAssetQueue = std::make_unique<foxglove::CallbackQueue>(logHandler, 1 /* num_threads */);
+
   foxglove::ServerOptions serverOptions;
   serverOptions.capabilities = _capabilities;
   if (_useSimTime) {
     serverOptions.capabilities.push_back(foxglove::CAPABILITY_TIME);
   }
-  serverOptions.supportedEncodings = {"cdr"};
+  serverOptions.supportedEncodings = {"cdr", "json"};
   serverOptions.metadata = {{"ROS_DISTRO", rosDistro}};
   serverOptions.sendBufferLimitBytes = send_buffer_limit;
   serverOptions.sessionId = std::to_string(std::time(nullptr));
@@ -88,6 +96,14 @@ FoxgloveBridge::FoxgloveBridge(const rclcpp::NodeOptions& options)
     _paramInterface->setParamUpdateCallback(std::bind(&FoxgloveBridge::parameterUpdates, this, _1));
   }
 
+  if (hasCapability(foxglove::CAPABILITY_ASSETS)) {
+    hdlrs.fetchAssetHandler = [this](const std::string& uri, uint32_t requestId,
+                                     ConnectionHandle hdl) {
+      _fetchAssetQueue->addCallback(
+        std::bind(&FoxgloveBridge::fetchAsset, this, uri, requestId, hdl));
+    };
+  }
+
   _server->setHandlers(std::move(hdlrs));
   _server->start(address, port);
 
@@ -111,7 +127,7 @@ FoxgloveBridge::FoxgloveBridge(const rclcpp::NodeOptions& options)
   if (_useSimTime) {
     _clockSubscription = this->create_subscription<rosgraph_msgs::msg::Clock>(
       "/clock", rclcpp::QoS{rclcpp::KeepLast(1)}.best_effort(),
-      [&](std::shared_ptr<rosgraph_msgs::msg::Clock> msg) {
+      [&](std::shared_ptr<const rosgraph_msgs::msg::Clock> msg) {
         const auto timestamp = rclcpp::Time{msg->clock}.nanoseconds();
         assert(timestamp >= 0 && "Timestamp is negative");
         _server->broadcastTime(static_cast<uint64_t>(timestamp));
@@ -120,6 +136,7 @@ FoxgloveBridge::FoxgloveBridge(const rclcpp::NodeOptions& options)
 }
 
 FoxgloveBridge::~FoxgloveBridge() {
+  _shuttingDown = true;
   RCLCPP_INFO(this->get_logger(), "Shutting down %s", this->get_name());
   if (_rosgraphPollThread) {
     _rosgraphPollThread->join();
@@ -133,7 +150,7 @@ void FoxgloveBridge::rosgraphPollThread() {
   updateAdvertisedServices();
 
   auto graphEvent = this->get_graph_event();
-  while (rclcpp::ok()) {
+  while (!_shuttingDown && rclcpp::ok()) {
     try {
       this->wait_for_graph_change(graphEvent, 200ms);
       bool triggered = graphEvent->check_and_clear();
@@ -249,7 +266,6 @@ void FoxgloveBridge::updateAdvertisedTopics(
                   topicAndDatatype.first.c_str(), topicAndDatatype.second.c_str(), err.what());
       continue;
     }
-
     channelsToAdd.push_back(newChannel);
   }
 
@@ -457,17 +473,30 @@ void FoxgloveBridge::subscribe(foxglove::ChannelId channelId, ConnectionHandle c
     if (qos.durability() == rclcpp::DurabilityPolicy::TransientLocal) {
       ++durabilityTransientLocalEndpointsCount;
     }
-    if (topic == "/tf") {
-      depth = 50;
-    } else {
-      depth = std::min(_maxQosDepth, depth + qos.depth());
-    }
+    // Some RMWs do not retrieve history information of the publisher endpoint in which case the
+    // history depth is 0. We use a lower limit of 1 here, so that the history depth is at least
+    // equal to the number of publishers. This covers the case where there are multiple
+    // transient_local publishers with a depth of 1 (e.g. multiple tf_static transform
+    // broadcasters). See also
+    // https://github.com/foxglove/ros-foxglove-bridge/issues/238 and
+    // https://github.com/foxglove/ros-foxglove-bridge/issues/208
+    const size_t publisherHistoryDepth = std::max(1ul, qos.depth());
+    depth = depth + publisherHistoryDepth;
   }
 
-  rclcpp::QoS qos{rclcpp::KeepLast(std::max(depth, _minQosDepth))};
+  depth = std::max(depth, _minQosDepth);
+  if (depth > _maxQosDepth) {
+    RCLCPP_WARN(this->get_logger(),
+                "Limiting history depth for topic '%s' to %zu (was %zu). You may want to increase "
+                "the max_qos_depth parameter value.",
+                topic.c_str(), _maxQosDepth, depth);
+    depth = _maxQosDepth;
+  }
+
+  rclcpp::QoS qos{rclcpp::KeepLast(depth)};
 
   // If all endpoints are reliable, ask for reliable
-  if (reliabilityReliableEndpointsCount == publisherInfo.size()) {
+  if (!publisherInfo.empty() && reliabilityReliableEndpointsCount == publisherInfo.size()) {
     qos.reliable();
   } else {
     if (reliabilityReliableEndpointsCount > 0) {
@@ -481,7 +510,7 @@ void FoxgloveBridge::subscribe(foxglove::ChannelId channelId, ConnectionHandle c
   }
 
   // If all endpoints are transient_local, ask for transient_local
-  if (durabilityTransientLocalEndpointsCount == publisherInfo.size()) {
+  if (!publisherInfo.empty() && durabilityTransientLocalEndpointsCount == publisherInfo.size()) {
     qos.transient_local();
   } else {
     if (durabilityTransientLocalEndpointsCount > 0) {
@@ -506,7 +535,9 @@ void FoxgloveBridge::subscribe(foxglove::ChannelId channelId, ConnectionHandle c
   try {
     auto subscriber = this->create_generic_subscription(
       topic, datatype, qos,
-      std::bind(&FoxgloveBridge::rosMessageHandler, this, channelId, clientHandle, _1),
+      [this, channelId, clientHandle](std::shared_ptr<const rclcpp::SerializedMessage> msg) {
+        this->rosMessageHandler(channelId, clientHandle, msg);
+      },
       subscriptionOptions);
     subscriptionsByClient.emplace(clientHandle, std::move(subscriber));
   } catch (const std::exception& ex) {
@@ -570,6 +601,42 @@ void FoxgloveBridge::clientAdvertise(const foxglove::ClientAdvertisement& advert
         std::to_string(advertisement.channelId) + " it had already advertised");
   }
 
+  if (advertisement.schemaName.empty()) {
+    throw foxglove::ClientChannelError(
+      advertisement.channelId,
+      "Received client advertisement from " + _server->remoteEndpointString(hdl) + " for channel " +
+        std::to_string(advertisement.channelId) + " with empty schema name");
+  }
+
+  if (advertisement.encoding == "json") {
+    // register the JSON parser for this schemaName
+    auto parserIt = _jsonParsers.find(advertisement.schemaName);
+    if (parserIt == _jsonParsers.end()) {
+      const auto& schemaName = advertisement.schemaName;
+      std::string schema = "";
+
+      if (!advertisement.schema.empty()) {
+        // Schema is given by the advertisement
+        schema = std::string(reinterpret_cast<const char*>(advertisement.schema.data()),
+                             advertisement.schema.size());
+      } else {
+        // Schema not given, look it up.
+        auto [format, msgDefinition] = _messageDefinitionCache.get_full_text(schemaName);
+        if (format != foxglove::MessageDefinitionFormat::MSG) {
+          throw foxglove::ClientChannelError(
+            advertisement.channelId,
+            "Message definition (.msg) for schema " + schemaName + " not found.");
+        }
+
+        schema = msgDefinition;
+      }
+
+      auto parser = std::make_shared<RosMsgParser::Parser>(
+        advertisement.topic, RosMsgParser::ROSType(schemaName), schema);
+      _jsonParsers.insert({schemaName, parser});
+    }
+  }
+
   try {
     // Create a new topic advertisement
     const auto& topicName = advertisement.topic;
@@ -597,9 +664,10 @@ void FoxgloveBridge::clientAdvertise(const foxglove::ClientAdvertisement& advert
     publisherOptions.callback_group = _clientPublishCallbackGroup;
     auto publisher = this->create_generic_publisher(topicName, topicType, qos, publisherOptions);
 
-    RCLCPP_INFO(this->get_logger(), "Client %s is advertising \"%s\" (%s) on channel %d",
+    RCLCPP_INFO(this->get_logger(),
+                "Client %s is advertising \"%s\" (%s) on channel %d with encoding \"%s\"",
                 _server->remoteEndpointString(hdl).c_str(), topicName.c_str(), topicType.c_str(),
-                advertisement.channelId);
+                advertisement.channelId, advertisement.encoding.c_str());
 
     // Store the new topic advertisement
     clientPublications.emplace(advertisement.channelId, std::move(publisher));
@@ -672,14 +740,58 @@ void FoxgloveBridge::clientMessage(const foxglove::ClientMessage& message, Conne
     publisher = it2->second;
   }
 
-  // Copy the message payload into a SerializedMessage object
-  rclcpp::SerializedMessage serializedMessage{message.getLength()};
-  auto& rclSerializedMsg = serializedMessage.get_rcl_serialized_message();
-  std::memcpy(rclSerializedMsg.buffer, message.getData(), message.getLength());
-  rclSerializedMsg.buffer_length = message.getLength();
+  auto publishMessage = [publisher, this](const void* data, size_t size) {
+    // Copy the message payload into a SerializedMessage object
+    rclcpp::SerializedMessage serializedMessage{size};
+    auto& rclSerializedMsg = serializedMessage.get_rcl_serialized_message();
+    std::memcpy(rclSerializedMsg.buffer, data, size);
+    rclSerializedMsg.buffer_length = size;
+    // Publish the message
+    if (_disableLoanMessage || !publisher->can_loan_messages()) {
+      publisher->publish(serializedMessage);
+    } else {
+      publisher->publish_as_loaned_msg(serializedMessage);
+    }
+  };
 
-  // Publish the message
-  publisher->publish(serializedMessage);
+  if (message.advertisement.encoding == "cdr") {
+    publishMessage(message.getData(), message.getLength());
+  } else if (message.advertisement.encoding == "json") {
+    // get the specific parser for this schemaName
+    std::shared_ptr<RosMsgParser::Parser> parser;
+    {
+      std::lock_guard<std::mutex> lock(_clientAdvertisementsMutex);
+      auto parserIt = _jsonParsers.find(message.advertisement.schemaName);
+      if (parserIt != _jsonParsers.end()) {
+        parser = parserIt->second;
+      }
+    }
+    if (!parser) {
+      throw foxglove::ClientChannelError(message.advertisement.channelId,
+                                         "Dropping client message from " +
+                                           _server->remoteEndpointString(hdl) +
+                                           " with encoding \"json\": no parser found");
+    } else {
+      thread_local RosMsgParser::ROS2_Serializer serializer;
+      serializer.reset();
+      const std::string jsonMessage(reinterpret_cast<const char*>(message.getData()),
+                                    message.getLength());
+      try {
+        parser->serializeFromJson(jsonMessage, &serializer);
+        publishMessage(serializer.getBufferData(), serializer.getBufferSize());
+      } catch (const std::exception& ex) {
+        throw foxglove::ClientChannelError(message.advertisement.channelId,
+                                           "Dropping client message from " +
+                                             _server->remoteEndpointString(hdl) +
+                                             " with encoding \"json\": " + ex.what());
+      }
+    }
+  } else {
+    throw foxglove::ClientChannelError(
+      message.advertisement.channelId,
+      "Dropping client message from " + _server->remoteEndpointString(hdl) +
+        " with unknown encoding \"" + message.advertisement.encoding + "\"");
+  }
 }
 
 void FoxgloveBridge::setParameters(const std::vector<foxglove::Parameter>& parameters,
@@ -740,7 +852,7 @@ void FoxgloveBridge::logHandler(LogLevel level, char const* msg) {
 
 void FoxgloveBridge::rosMessageHandler(const foxglove::ChannelId& channelId,
                                        ConnectionHandle clientHandle,
-                                       std::shared_ptr<rclcpp::SerializedMessage> msg) {
+                                       std::shared_ptr<const rclcpp::SerializedMessage> msg) {
   // NOTE: Do not call any RCLCPP_* logging functions from this function. Otherwise, subscribing
   // to `/rosout` will cause a feedback loop
   const auto timestamp = this->now().nanoseconds();
@@ -799,6 +911,38 @@ void FoxgloveBridge::serviceRequest(const foxglove::ServiceRequest& request,
     _server->sendServiceResponse(clientHandle, response);
   };
   client->async_send_request(reqMessage, responseReceivedCallback);
+}
+
+void FoxgloveBridge::fetchAsset(const std::string& uri, uint32_t requestId,
+                                ConnectionHandle clientHandle) {
+  foxglove::FetchAssetResponse response;
+  response.requestId = requestId;
+
+  try {
+    // We reject URIs that are not on the allowlist or that contain two consecutive dots. The latter
+    // can be utilized to construct URIs for retrieving confidential files that should not be
+    // accessible over the WebSocket connection. Example:
+    // `package://<pkg_name>/../../../secret.txt`. This is an extra security measure and should not
+    // be necessary if the allowlist is strict enough.
+    if (uri.find("..") != std::string::npos || !isWhitelisted(uri, _assetUriAllowlistPatterns)) {
+      throw std::runtime_error("Asset URI not allowed: " + uri);
+    }
+
+    resource_retriever::Retriever resource_retriever;
+    const resource_retriever::MemoryResource memoryResource = resource_retriever.get(uri);
+    response.status = foxglove::FetchAssetStatus::Success;
+    response.errorMessage = "";
+    response.data.resize(memoryResource.size);
+    std::memcpy(response.data.data(), memoryResource.data.get(), memoryResource.size);
+  } catch (const std::exception& ex) {
+    RCLCPP_WARN(this->get_logger(), "Failed to retrieve asset '%s': %s", uri.c_str(), ex.what());
+    response.status = foxglove::FetchAssetStatus::Error;
+    response.errorMessage = "Failed to retrieve asset " + uri;
+  }
+
+  if (_server) {
+    _server->sendFetchAssetResponse(clientHandle, response);
+  }
 }
 
 bool FoxgloveBridge::hasCapability(const std::string& capability) {

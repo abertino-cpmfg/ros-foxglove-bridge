@@ -8,8 +8,10 @@
 
 #include <rclcpp/rclcpp.hpp>
 #include <rosgraph_msgs/msg/clock.hpp>
+#include <rosx_introspection/ros_parser.hpp>
 #include <websocketpp/common/connection_hdl.hpp>
 
+#include <foxglove_bridge/callback_queue.hpp>
 #include <foxglove_bridge/foxglove_bridge.hpp>
 #include <foxglove_bridge/generic_client.hpp>
 #include <foxglove_bridge/message_definition_cache.hpp>
@@ -59,6 +61,7 @@ private:
   foxglove::MessageDefinitionCache _messageDefinitionCache;
   std::vector<std::regex> _topicWhitelistPatterns;
   std::vector<std::regex> _serviceWhitelistPatterns;
+  std::vector<std::regex> _assetUriAllowlistPatterns;
   std::shared_ptr<ParameterInterface> _paramInterface;
   std::unordered_map<foxglove::ChannelId, foxglove::ChannelWithoutId> _advertisedTopics;
   std::unordered_map<foxglove::ServiceId, foxglove::ServiceWithoutId> _advertisedServices;
@@ -79,6 +82,10 @@ private:
   std::vector<std::string> _capabilities;
   std::atomic<bool> _subscribeGraphUpdates = false;
   bool _includeHidden = false;
+  bool _disableLoanMessage = true;
+  std::unique_ptr<foxglove::CallbackQueue> _fetchAssetQueue;
+  std::unordered_map<std::string, std::shared_ptr<RosMsgParser::Parser>> _jsonParsers;
+  std::atomic<bool> _shuttingDown = false;
 
   void subscribeConnectionGraph(bool subscribe);
 
@@ -106,9 +113,11 @@ private:
   void logHandler(LogLevel level, char const* msg);
 
   void rosMessageHandler(const foxglove::ChannelId& channelId, ConnectionHandle clientHandle,
-                         std::shared_ptr<rclcpp::SerializedMessage> msg);
+                         std::shared_ptr<const rclcpp::SerializedMessage> msg);
 
   void serviceRequest(const foxglove::ServiceRequest& request, ConnectionHandle clientHandle);
+
+  void fetchAsset(const std::string& assetId, uint32_t requestId, ConnectionHandle clientHandle);
 
   bool hasCapability(const std::string& capability);
 };

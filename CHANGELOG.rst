@@ -2,6 +2,100 @@
 Changelog for package foxglove_bridge
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+0.8.1 (2024-11-26)
+------------------
+* Improve Error Reporting and Reduce Log Redundancy (`#327 <https://github.com/foxglove/ros-foxglove-bridge/issues/327>`_)
+* Contributors: Robin Dumas
+
+0.8.0 (2024-07-31)
+------------------
+* Fix usage of deprecated AsyncParametersClient constructor (`#319 <https://github.com/foxglove/ros-foxglove-bridge/issues/319>`_)
+* Add ROS2 JSON publishing support (`#307 <https://github.com/foxglove/ros-foxglove-bridge/issues/307>`_)
+* Contributors: Davide Faconti, Hans-Joachim Krauch
+
+0.7.10 (2024-07-12)
+-------------------
+* Make ROS1 service type retrieval more robust (`#316 <https://github.com/foxglove/ros-foxglove-bridge/issues/316>`_)
+* Contributors: Hans-Joachim Krauch
+
+0.7.9 (2024-07-05)
+------------------
+* Fix parsing of IDL message definitions (`#313 <https://github.com/foxglove/ros-foxglove-bridge/issues/313>`_)
+* Support publishing client message as loaned message (`#314 <https://github.com/foxglove/ros-foxglove-bridge/issues/314>`_)
+* fix: remove extra ";" in websocket_server.hpp (`#311 <https://github.com/foxglove/ros-foxglove-bridge/issues/311>`_)
+* Fix rolling smoke tests crashing (`#309 <https://github.com/foxglove/ros-foxglove-bridge/issues/309>`_)
+* Contributors: Andrey Milko, Hans-Joachim Krauch
+
+0.7.8 (2024-06-11)
+------------------
+* Fix srv definition parsing failing due to carriage return (`#303 <https://github.com/foxglove/ros-foxglove-bridge/issues/303>`_)
+* Contributors: Hans-Joachim Krauch
+
+0.7.7 (2024-05-21)
+------------------
+* send service call failure operation (`#298 <https://github.com/foxglove/ros-foxglove-bridge/issues/298>`_)
+* Fix service definition parsing on ROS rolling (`#293 <https://github.com/foxglove/ros-foxglove-bridge/issues/293>`_)
+* Update docs to discourage users from using websocket compression (`#297 <https://github.com/foxglove/ros-foxglove-bridge/issues/297>`_)
+* Update README.md to remove '$ ' so that you can copy and run command (`#294 <https://github.com/foxglove/ros-foxglove-bridge/issues/294>`_)
+* Fix typo in ROS2 launch file example (`#296 <https://github.com/foxglove/ros-foxglove-bridge/issues/296>`_)
+* Contributors: Felipe Galindo, Hans-Joachim Krauch, Jacob Bandes-Storch, Roman Shtylman
+
+0.7.6 (2024-02-26)
+------------------
+* Fix rolling builds (`#289 <https://github.com/foxglove/ros-foxglove-bridge/issues/289>`_)
+* Remove dual ROS 1+2 devcontainer, remove ROS Galactic from the support matrix (`#285 <https://github.com/foxglove/ros-foxglove-bridge/issues/285>`_)
+* Contributors: Hans-Joachim Krauch, John Hurliman
+
+0.7.5 (2023-12-29)
+------------------
+* Add ROS 2 dependency for ament_index_cpp (`#281 <https://github.com/foxglove/ros-foxglove-bridge/issues/281>`_)
+* Contributors: Chris Lalancette
+
+0.7.4 (2023-12-14)
+------------------
+* Solved bug with incompatible QoS policies
+* added explicit call to ParameterValue() to avoid clang error (`#277 <https://github.com/foxglove/ros-foxglove-bridge/issues/277>`_)
+* Add iron release badge to readme (`#271 <https://github.com/foxglove/ros-foxglove-bridge/issues/271>`_)
+* Contributors: Hans-Joachim Krauch, Ted
+
+0.7.3 (2023-10-25)
+------------------
+* Fix `asset_uri_whitelist` regex backtracking issue, add more extensions (`#270 <https://github.com/foxglove/ros-foxglove-bridge/issues/270>`_)
+* [ROS1] Fix callback accessing invalid reference to promise (`#268 <https://github.com/foxglove/ros-foxglove-bridge/issues/268>`_)
+* Contributors: Hans-Joachim Krauch
+
+0.7.2 (2023-09-12)
+------------------
+* Fix invalid pointers not being caught (`#265 <https://github.com/foxglove/ros-foxglove-bridge/issues/265>`_)
+* Make ROS1 service type retrieval more robust (`#263 <https://github.com/foxglove/ros-foxglove-bridge/issues/263>`_)
+* Contributors: Hans-Joachim Krauch
+
+0.7.1 (2023-08-21)
+------------------
+* Communicate double / double array parameters with type info, explicitly cast when set from integer (`#256 <https://github.com/foxglove/ros-foxglove-bridge/issues/256>`_)
+* Make ROS 2 smoke tests less flaky (`#260 <https://github.com/foxglove/ros-foxglove-bridge/issues/260>`_)
+* Add debug config for ros2 smoke test (`#257 <https://github.com/foxglove/ros-foxglove-bridge/issues/257>`_)
+* Handle client disconnection in message handler thread (`#259 <https://github.com/foxglove/ros-foxglove-bridge/issues/259>`_)
+* Reduce smoke test flakiness (`#258 <https://github.com/foxglove/ros-foxglove-bridge/issues/258>`_)
+* Server code improvements (`#250 <https://github.com/foxglove/ros-foxglove-bridge/issues/250>`_)
+* Contributors: Hans-Joachim Krauch
+
+0.7.0 (2023-07-12)
+------------------
+* Fix ROS2 launch file install rule not installing launch subfolder (`#243 <https://github.com/foxglove/ros-foxglove-bridge/issues/243>`_)
+* Support building with boost asio (`#247 <https://github.com/foxglove/ros-foxglove-bridge/issues/247>`_)
+* Avoid usage of tmpnam() for creating random filename (`#246 <https://github.com/foxglove/ros-foxglove-bridge/issues/246>`_)
+* Implement ws-protocol's `fetchAsset` specification (`#232 <https://github.com/foxglove/ros-foxglove-bridge/issues/232>`_)
+* Use `--include-eol-distros` for `rosdep` to fix melodic builds (`#244 <https://github.com/foxglove/ros-foxglove-bridge/issues/244>`_)
+* Reduce logging severity for parameter retrieval logs (`#240 <https://github.com/foxglove/ros-foxglove-bridge/issues/240>`_)
+* Contributors: Hans-Joachim Krauch, Micah Guttman
+
+0.6.4 (2023-07-05)
+------------------
+* Assume publisher qos depth of 1 if the middleware reports the qos history as unknown (`#239 <https://github.com/foxglove/ros-foxglove-bridge/issues/239>`_)
+* devcontainer: Use `--include-eol-distros` for `rosdep update` (`#237 <https://github.com/foxglove/ros-foxglove-bridge/issues/237>`_)
+* Contributors: Hans-Joachim Krauch
+
 0.6.3 (2023-06-16)
 ------------------
 * Add iron build to CI (`#234 <https://github.com/foxglove/ros-foxglove-bridge/issues/234>`_)

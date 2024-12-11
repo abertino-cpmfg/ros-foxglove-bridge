@@ -1,6 +1,8 @@
 #include "foxglove_bridge/parameter_interface.hpp"
 
 #include <nlohmann/json.hpp>
+#include <rclcpp/qos.hpp>
+#include <rclcpp/version.h>
 
 #include <foxglove_bridge/regex_utils.hpp>
 #include <foxglove_bridge/utils.hpp>
@@ -8,6 +10,12 @@
 namespace {
 
 constexpr char PARAM_SEP = '.';
+
+#if RCLCPP_VERSION_MAJOR > 16
+const rclcpp::ParametersQoS parameterQoS;
+#else
+const rmw_qos_profile_t& parameterQoS = rmw_qos_profile_parameters;
+#endif
 
 static std::pair<std::string, std::string> getNodeAndParamName(
   const std::string& nodeNameAndParamName) {
@@ -94,7 +102,7 @@ static foxglove::Parameter fromRosParam(const rclcpp::Parameter& p) {
   } else if (type == rclcpp::ParameterType::PARAMETER_BOOL_ARRAY) {
     std::vector<foxglove::ParameterValue> paramVec;
     for (const auto value : p.as_bool_array()) {
-      paramVec.push_back(value);
+      paramVec.push_back(foxglove::ParameterValue(value));
     }
     return foxglove::Parameter(p.get_name(), paramVec);
   } else if (type == rclcpp::ParameterType::PARAMETER_INTEGER_ARRAY) {
@@ -147,8 +155,8 @@ ParameterList ParameterInterface::getParams(const std::vector<std::string>& para
       paramNamesByNodeName[nodeName].push_back(paramName);
     }
 
-    RCLCPP_INFO(_node->get_logger(), "Getting %zu parameters from %zu nodes...", paramNames.size(),
-                paramNamesByNodeName.size());
+    RCLCPP_DEBUG(_node->get_logger(), "Getting %zu parameters from %zu nodes...", paramNames.size(),
+                 paramNamesByNodeName.size());
   } else {
     // Make a map of node names to empty parameter lists
     // Only consider nodes that offer services to list & get parameters.
@@ -181,8 +189,8 @@ ParameterList ParameterInterface::getParams(const std::vector<std::string>& para
     }
 
     if (!paramNamesByNodeName.empty()) {
-      RCLCPP_INFO(_node->get_logger(), "Getting all parameters from %zu nodes...",
-                  paramNamesByNodeName.size());
+      RCLCPP_DEBUG(_node->get_logger(), "Getting all parameters from %zu nodes...",
+                   paramNamesByNodeName.size());
     }
   }
 
@@ -195,8 +203,8 @@ ParameterList ParameterInterface::getParams(const std::vector<std::string>& para
     auto paramClientIt = _paramClientsByNode.find(nodeName);
     if (paramClientIt == _paramClientsByNode.end()) {
       const auto insertedPair = _paramClientsByNode.emplace(
-        nodeName, rclcpp::AsyncParametersClient::make_shared(
-                    _node, nodeName, rmw_qos_profile_parameters, _callbackGroup));
+        nodeName,
+        rclcpp::AsyncParametersClient::make_shared(_node, nodeName, parameterQoS, _callbackGroup));
       paramClientIt = insertedPair.first;
     }
 
@@ -238,8 +246,8 @@ void ParameterInterface::setParams(const ParameterList& parameters,
     auto paramClientIt = _paramClientsByNode.find(nodeName);
     if (paramClientIt == _paramClientsByNode.end()) {
       const auto insertedPair = _paramClientsByNode.emplace(
-        nodeName, rclcpp::AsyncParametersClient::make_shared(
-                    _node, nodeName, rmw_qos_profile_parameters, _callbackGroup));
+        nodeName,
+        rclcpp::AsyncParametersClient::make_shared(_node, nodeName, parameterQoS, _callbackGroup));
       paramClientIt = insertedPair.first;
     }
 
@@ -281,8 +289,8 @@ void ParameterInterface::subscribeParams(const std::vector<std::string>& paramNa
     auto paramClientIt = _paramClientsByNode.find(nodeName);
     if (paramClientIt == _paramClientsByNode.end()) {
       const auto insertedPair = _paramClientsByNode.emplace(
-        nodeName, rclcpp::AsyncParametersClient::make_shared(
-                    _node, nodeName, rmw_qos_profile_parameters, _callbackGroup));
+        nodeName,
+        rclcpp::AsyncParametersClient::make_shared(_node, nodeName, parameterQoS, _callbackGroup));
       paramClientIt = insertedPair.first;
     }
 
